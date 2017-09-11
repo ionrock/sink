@@ -2,10 +2,10 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
-	"strings"
 
+	"github.com/ionrock/sink/command"
+	"github.com/ionrock/sink/repo"
 	"github.com/ionrock/sink/server"
 
 	"github.com/google/go-github/github"
@@ -25,42 +25,12 @@ func newClient(token string) *github.Client {
 	return github.NewClient(tc)
 }
 
-type EchoCommandMap struct {
-	c *github.Client
-}
-
-func clean(s string) string {
-	return strings.TrimSpace(s)
-}
-
-func (cm *EchoCommandMap) ExecuteIssueCommentEvent(event *github.IssueCommentEvent) (string, error) {
-	message := strings.TrimSpace(event.Comment.GetBody())
-	if !strings.HasPrefix(message, "sink: ") {
-		return "", nil
-	}
-
-	org := *event.Repo.Owner.Login
-	repo := *event.Repo.Name
-	prNum := *event.Issue.Number
-
-	comment := fmt.Sprintf("Hey I heard you say: %q", message)
-
-	entry := &github.IssueComment{Body: &comment}
-	ctx := context.Background()
-
-	_, _, err := cm.c.Issues.CreateComment(ctx, org, repo, prNum, entry)
-	if err != nil {
-		return "", err
-	}
-	msg := fmt.Sprintf("%s %s %d %q", org, repo, prNum, comment)
-	fmt.Println(msg)
-	return msg, nil
-}
-
 func main() {
 	var (
 		webhookSecret = envflag.String("SINK_WEBHOOK_SECRET", "", "The GitHub webhook secret")
 		accessToken   = envflag.String("SINK_REPO_ACCESS_TOKEN", "", "An access token with access the PR repo")
+		repoRemote    = envflag.String("SINK_REPO_URL", "", "The URL to the repo")
+		commandMap    = envflag.String("SINK_COMMAND_MAP", "", "The command map file to use")
 	)
 	envflag.Parse()
 
@@ -72,9 +42,25 @@ func main() {
 		log.Fatal("The SINK_REPO_ACCESS_TOKEN must be set")
 	}
 
+	if *repoRemote == "" {
+		log.Fatal("The SINK_REPO_URL must be set")
+	}
+
+	r := repo.Git{Remote: *repoRemote}
+	err := r.Clone()
+	if err != nil {
+		log.Fatalf("Error cloning repo: %q", err)
+	}
+
 	c := newClient(*accessToken)
+
+	cmdMap, err := command.NewMap(*commandMap, c)
+	if err != nil {
+		log.Fatalf("Error loading command map: %q", err)
+	}
+
 	server := &server.Server{
-		Cmds:   &EchoCommandMap{c: c},
+		Cmds:   cmdMap,
 		Client: c,
 		Addr:   ":8888",
 		Path:   "/",
