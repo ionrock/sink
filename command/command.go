@@ -1,40 +1,41 @@
 package command
 
 import (
-	"context"
 	"encoding/json"
-	"fmt"
 	"io/ioutil"
-	"log"
 	"os/exec"
 	"strings"
-
-	"github.com/google/go-github/github"
 )
 
+// CommandDefinition is named command for running commands in a CommandMap.
 type CommandDefinition struct {
 	Name string
 	Run  string
 }
 
+// Execute runs the command from the CommandDefinition and returns the
+// output of the command along with any errors.
 func (c *CommandDefinition) Execute(msg string) (string, error) {
 	args := strings.Fields(clean(msg))
 
 	cmd := exec.Command(c.Run, args[1:]...)
 	out, err := cmd.Output()
 	if err != nil {
-		return "error", err
+		return string(out), err
 	}
 
 	return string(out), nil
 }
 
+// CommandMapDefinition defines a prefix and list of commands to run
+// when the prefix matched in a PR.
 type CommandMapDefinition struct {
 	Prefix   string
 	Commands []*CommandDefinition
 }
 
-func NewMap(p string, c *github.Client) (*CommandMap, error) {
+// NewMap returns a CommandMap based on a JSON file.
+func NewMap(p string) (*CommandMap, error) {
 	f, err := ioutil.ReadFile(p)
 	if err != nil {
 		return nil, err
@@ -47,48 +48,34 @@ func NewMap(p string, c *github.Client) (*CommandMap, error) {
 		return nil, err
 	}
 
-	return &CommandMap{Def: m, c: c}, nil
+	return &CommandMap{Def: m}, nil
 }
 
+// CommandMap takes a prefix and matches it to an action that is
+// implemented by a command.
 type CommandMap struct {
 	Def *CommandMapDefinition
-	c   *github.Client
 }
 
 func clean(s string) string {
 	return strings.TrimSpace(s)
 }
 
-func (cm *CommandMap) ExecuteIssueCommentEvent(event *github.IssueCommentEvent) (string, error) {
-	message := strings.TrimSpace(event.Comment.GetBody())
+// ExecuteIssueCommentEvent handles new comment message and tries to
+// match a prefix in the CommandMap.
+func (cm *CommandMap) ExecuteIssueCommentEvent(message string) (string, error) {
 	if !strings.HasPrefix(message, cm.Def.Prefix) {
 		return "", nil
 	}
 
+	// TODO: This is probably not necessary. There is no need to
+	// enforce a `sink $prefix $args` pattern
+	//
+	// Trim the globa prefix
 	message = clean(strings.TrimPrefix(message, cm.Def.Prefix))
-
 	for _, cd := range cm.Def.Commands {
 		if strings.HasPrefix(message, cd.Name) {
-			result, err := cd.Execute(message)
-			if err != nil {
-				log.Printf("error running command: %q", err)
-				return "", err
-			}
-
-			org := *event.Repo.Owner.Login
-			repo := *event.Repo.Name
-			prNum := *event.Issue.Number
-
-			entry := &github.IssueComment{Body: &result}
-			ctx := context.Background()
-
-			_, _, err = cm.c.Issues.CreateComment(ctx, org, repo, prNum, entry)
-			if err != nil {
-				return "", err
-			}
-			msg := fmt.Sprintf("%s %s %d %q", org, repo, prNum, result)
-			fmt.Println(msg)
-			return msg, nil
+			return cd.Execute(message)
 		}
 	}
 

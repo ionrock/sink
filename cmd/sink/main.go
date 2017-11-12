@@ -54,7 +54,7 @@ func main() {
 
 	c := newClient(*accessToken)
 
-	cmdMap, err := command.NewMap(*commandMap, c)
+	cmdMap, err := command.NewMap(*commandMap)
 	if err != nil {
 		log.Fatalf("Error loading command map: %q", err)
 	}

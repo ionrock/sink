@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha1"
 	"encoding/hex"
@@ -9,6 +10,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/google/go-github/github"
@@ -19,7 +21,7 @@ import (
 var ErrInvalidHookFormat = errors.New("Unable to parse event string. Invalid Format.")
 
 type CmdMap interface {
-	ExecuteIssueCommentEvent(*github.IssueCommentEvent) (string, error)
+	ExecuteIssueCommentEvent(string) (string, error)
 }
 
 type Server struct {
@@ -122,12 +124,37 @@ func (s Server) processIssueCommentEvent(event *github.IssueCommentEvent, w http
 		return
 	}
 
-	result, err := s.Cmds.ExecuteIssueCommentEvent(event)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	message := strings.TrimSpace(event.Comment.GetBody())
+	result, commandErr := s.Cmds.ExecuteIssueCommentEvent(message)
+
+	result, commentErr := s.postComment(event, result)
+	if commentErr != nil {
+		http.Error(w, commentErr.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if commandErr != nil {
+		http.Error(w, commandErr.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintln(w, result)
+}
+
+func (s Server) postComment(event *github.IssueCommentEvent, msg string) (string, error) {
+	org := *event.Repo.Owner.Login
+	repo := *event.Repo.Name
+	prNum := *event.Issue.Number
+
+	entry := &github.IssueComment{Body: &msg}
+	ctx := context.Background()
+
+	_, _, err := s.Client.Issues.CreateComment(ctx, org, repo, prNum, entry)
+	if err != nil {
+		return "", err
+	}
+	output := fmt.Sprintf("%s %s %d %q", org, repo, prNum, msg)
+	fmt.Printf(output)
+	return output, nil
 }
